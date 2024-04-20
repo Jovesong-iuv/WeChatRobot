@@ -3,6 +3,10 @@
 import logging
 import re
 import time
+import requests
+import pandas as pd
+from typing import List
+from fuzzywuzzy import process
 import xml.etree.ElementTree as ET
 from queue import Empty
 from threading import Thread
@@ -130,6 +134,139 @@ class Robot(Job):
             self.LOG.error(f"无法从 ChatGPT 获得答案")
             return False
 
+    def get_city_code_by_name(self, msg_content: str) -> str:
+        # 读取 Excel 文件
+        df = pd.read_excel("doc/AMap_adcode_citycode.xlsx")
+
+        # 将城市名称作为索引
+        df.set_index("中文名", inplace=True)
+
+        # 从消息内容中提取城市名称
+        city_name, _ = process.extractOne(msg_content, df.index)
+
+        # 模糊匹配城市名称
+        matches = process.extract(city_name, df.index, limit=1)
+
+        # 如果匹配度超过阈值，则输出城市代码和区域代码
+        threshold = 80  # 设置匹配阈值
+        if matches[0][1] >= threshold:
+            matched_city_name = matches[0][0]
+
+            # 强制转换为整数，然后再转换为字符串
+            ad_code = str(int(df.loc[matched_city_name, "adcode"]))
+            print(f"找到最匹配的区域代码：{matched_city_name}, 区域代码为：{ad_code}")
+            return ad_code
+        else:
+            return "null"
+
+    def weather_report(self, city_name, receivers: List[str], type: str = "other") -> None:
+        """模拟发送天气预报"""
+
+        # 获取区域代码
+        ad_code = self.get_city_code_by_name(city_name)
+
+        if ad_code == "null":
+            error_message = "无法获取城市代码"
+            for receiver in receivers:
+                self.sendTextMsg(error_message, receiver)
+
+            return
+
+        # 获取天气 参考高德天气API获取天气。气象类型分为实时和预报，此处定义today&tomorrow为预报 now为实时
+        if type == "now":
+            url = f"https://restapi.amap.com/v3/weather/weatherInfo?city={ad_code}&key={self.config.GDTQ_api_key}&extensions=base&output=JSON"
+        else:
+            url = f"https://restapi.amap.com/v3/weather/weatherInfo?city={ad_code}&key={self.config.GDTQ_api_key}&extensions=all&output=JSON"
+
+        response = requests.get(url)
+
+        if response.status_code == 200:
+            data = response.json()
+
+            status = data.get("status")
+            if status == "1":
+                if type == "now":
+                    report = data.get("lives", [])
+                    if report:
+                        for item in report:
+                            province = item.get("province")  # 省份名
+                            city = item.get("city")  # 城市名
+                            reporttime = item.get("reporttime")  # 数据发布的时间
+                            weather = item.get("weather")  # 天气现象（汉字描述）
+                            temperature = item.get("temperature")  # 实时气温，单位：摄氏度
+                            humidity = item.get("humidity")  # 空气湿度
+                            winddirection = item.get("winddirection")  # 风向描述
+                            windpower = item.get("windpower")  # 风力级别，单位：级
+                            message = f"痛仰东部提醒您!!!\n\n"
+                            message += f"{province} - {city} 的天气信息：\n"
+                            message += f"数据发布的时间：{reporttime}\n"
+                            message += f"天气：{weather}\n"
+                            message += f"温度（°C）：{temperature}°C\n"
+                            message += f"空气湿度：{humidity}%\n"
+                            message += f"风向：{winddirection}\n"
+                            message += f"风力：{windpower}\n"
+                        message += f"\n痛仰东部祝您生活愉快！[呲牙][强]"
+                        for receiver in receivers:
+                            self.sendTextMsg(message, receiver)
+                        return
+                    else:
+                        error_message = "没有实况天气信息。"
+                        self.LOG.error(error_message)
+                else:
+                    forecasts = data.get("forecasts", [])
+                    if forecasts:
+                        for forecast in forecasts:
+                            city = forecast.get("city")
+                            province = forecast.get("province")
+                            report_time = forecast.get("reporttime")
+                            message = f"痛仰东部提醒您!!!\n\n"
+                            message += f"{province} - {city} 的天气信息：\n"
+                            message += f"数据发布时间：{report_time}\n"
+
+                            casts = forecast.get("casts", [])
+                            if casts:
+                                for cast in casts:
+                                    date = cast.get("date")
+                                    week = cast.get("week")
+                                    day_weather = cast.get("dayweather")
+                                    night_weather = cast.get("nightweather")
+                                    day_temp = cast.get("daytemp")
+                                    night_temp = cast.get("nighttemp")
+                                    day_wind = cast.get("daywind")
+                                    night_wind = cast.get("nightwind")
+                                    day_power = cast.get("daypower")
+                                    night_power = cast.get("nightpower")
+
+                                    message += f"\n日期：{date} 星期{week}\n"
+                                    message += f"白天天气：{day_weather}\n"
+                                    message += f"夜晚天气：{night_weather}\n"
+                                    message += f"白天温度：{day_temp} °C\n"
+                                    message += f"夜晚温度：{night_temp} °C\n"
+                                    message += f"白天风向：{day_wind}\n"
+                                    message += f"夜晚风向：{night_wind}\n"
+                                    message += f"白天风力：{day_power}\n"
+                                    message += f"夜晚风力：{night_power}\n"
+
+                            message += f"\n痛仰东部祝您生活愉快！[呲牙][强]"
+                            for receiver in receivers:
+                                self.sendTextMsg(message, receiver)
+                            return
+                    else:
+                        error_message = "没有天气预报。"
+                        self.LOG.error(error_message)
+
+            else:
+                info = data.get("info", "未知错误")
+                infocode = data.get("infocode", "未知")
+                error_message = f"获取天气失败,错误：{info} (Infocode: {infocode})"
+                for receiver in receivers:
+                    self.sendTextMsg(error_message, receiver)
+                return
+        else:
+            error_message = "无法获取天气信息。"
+            for receiver in receivers:
+                self.sendTextMsg(error_message, receiver)
+
     def processMsg(self, msg: WxMsg) -> None:
         """当接收到消息的时候，会调用本方法。如果不实现本方法，则打印原始消息。
         此处可进行自定义发送的内容,如通过 msg.content 关键字自动获取当前天气信息，并发送到对应的群组@发送者
@@ -149,8 +286,19 @@ class Robot(Job):
                 self.toAt(msg)
 
             else:  # 其他消息
-                keywords = ["二狗", "终结者", "小东"]
-                if any(keyword in msg.content for keyword in keywords):
+                keywords = {"二狗", "终结者", "小东"}
+                if keywords == {"二狗", "终结者", "小东"}:
+                    self.toAt(msg)
+                elif "天气" in msg.content:
+                    if any(keyword in msg.content for keyword in {"今日", "今天"}):
+                        self.weather_report(msg.content, [msg.roomid], type="other")
+                    elif any(keyword in msg.content for keyword in {"明日", "明天"}):
+                        self.weather_report(msg.content, [msg.roomid], type="other")
+                    elif any(keyword in msg.content for keyword in {"现在", "实时"}):
+                        self.weather_report(msg.content, [msg.roomid], type="now")
+                    else:
+                        self.weather_report(msg.content, [msg.roomid], type="other")
+                elif any(keyword in msg.content for keyword in keywords):
                     self.toAt(msg)
 
             return  # 处理完群聊信息，后面就不需要处理了
