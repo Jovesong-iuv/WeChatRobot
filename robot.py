@@ -285,22 +285,20 @@ class Robot(Job):
             if msg.is_at(self.wxid):  # 被@
                 self.toAt(msg)
 
-            else:  # 其他消息
+            else:  # 其他消息 唤醒词增加以及天气的响应-天气V1-不单独查询天跟实时的拆分
                 keywords = {"二狗", "终结者", "小东"}
-                if keywords == {"二狗", "终结者", "小东"}:
-                    self.toAt(msg)
-                elif "天气" in msg.content:
-                    if any(keyword in msg.content for keyword in {"今日", "今天"}):
-                        self.weather_report(msg.content, [msg.roomid], type="other")
-                    elif any(keyword in msg.content for keyword in {"明日", "明天"}):
-                        self.weather_report(msg.content, [msg.roomid], type="other")
-                    elif any(keyword in msg.content for keyword in {"现在", "实时"}):
-                        self.weather_report(msg.content, [msg.roomid], type="now")
+                if any(keyword in msg.content for keyword in keywords):
+                    if "天气" in msg.content:
+                        if any(keyword in msg.content for keyword in {"今日", "今天"}):
+                            self.weather_report(msg.content, [msg.roomid], type="other")
+                        elif any(keyword in msg.content for keyword in {"明日", "明天"}):
+                            self.weather_report(msg.content, [msg.roomid], type="other")
+                        elif any(keyword in msg.content for keyword in {"现在", "实时"}):
+                            self.weather_report(msg.content, [msg.roomid], type="now")
+                        else:
+                            self.weather_report(msg.content, [msg.roomid], type="other")
                     else:
-                        self.weather_report(msg.content, [msg.roomid], type="other")
-                elif any(keyword in msg.content for keyword in keywords):
-                    self.toAt(msg)
-
+                        self.toAt(msg)
             return  # 处理完群聊信息，后面就不需要处理了
 
         # 非群聊信息，按消息类型进行处理
